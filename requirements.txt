@@ -1,0 +1,4 @@
+#fastapi
+requests
+flask
+flask_sqlalchemy
