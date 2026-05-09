@@ -1,21 +1,39 @@
 from infisical_sdk import InfisicalSDKClient
+import os
+from dotenv import load_dotenv
+
+load_dotenv()
 
 # 1. Ініціалізація клієнта
-client = InfisicalSDKClient(host="https://vault.tomkat.in")
+client = InfisicalSDKClient(host=os.getenv("INFISICAL_SITE_URL"))
 
 # 2. Авторизація через Machine Identity
 client.auth.universal_auth.login(
-    client_id="f069ef92-8c63-40fa-a04e-ce9e8b06cf00",
-    client_secret="849c6eb6c62650b2b8af58b1ad486d6cc944987278c323d06870c261bf206a34"
+    client_id=os.getenv("INFISICAL_CLIENT_ID"),
+    client_secret=os.getenv("INFISICAL_CLIENT_SECRET")
 )
 
-# Отримання списку секретів
-secrets = client.secrets.list_secrets(
-    project_id="d6d3e764-7ce7-4a6a-b878-33c64433b9de",
-    environment_slug="dev",
-    secret_path="/"
-)
+# # Отримання списку секретів
+# secrets = client.secrets.list_secrets(
+#     project_id=os.getenv("INFISICAL_PROJECT_ID"),
+#     environment_slug="dev",
+#     secret_path="/"
+# )
+#
+# # Вивід результатів
+# for s in secrets.secrets:
+#     print(f"Ключ: {s.secretKey} | Значення: {s.secretValue}")
 
-# Вивід результатів
-for s in secrets.secrets:
-    print(f"Ключ: {s.secretKey} | Значення: {s.secretValue}")
+def get_secret_value(secret_name,env):
+    secret = client.secrets.get_secret_by_name(
+        secret_name=secret_name,
+        project_id=os.getenv("INFISICAL_PROJECT_ID"),
+        environment_slug=env,
+        secret_path="/",
+        expand_secret_references=True, # Optional
+        view_secret_value=True, # Optional
+        include_imports=True, # Optional
+        version=None # Optional
+    )
+    return secret.secretValue
+print (get_secret_value("budget_sync_id","prod"))
