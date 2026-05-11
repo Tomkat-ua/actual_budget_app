@@ -1,7 +1,7 @@
 from infisical_sdk import InfisicalSDKClient
 import os
 from dotenv import load_dotenv
-from flask import jsonify
+# from flask import jsonify
 
 load_dotenv()
 
@@ -52,6 +52,3 @@ def get_secret_value(secret_name,env):
         version=None # Optional
     )
     return secret.secretValue
-# print(get_secrets_list("dev"))
-# print (get_secret_value("budget_sync_id","prod"))
-print(get_secrets_dict("dev"))

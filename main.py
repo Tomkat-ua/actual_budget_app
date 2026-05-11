@@ -1,121 +1,124 @@
-import os
-from flask import Flask, render_template, request, redirect, url_for, flash
-from flask_sqlalchemy import SQLAlchemy
-import json
+import requests
+import db , secret as s, config as c
 from datetime import datetime
 
-app = Flask(__name__)
 
-# Налаштовуємо шлях до бази даних чітко всередині папки /instance
-# Flask автоматично знайде або створить папку instance поруч із app.py
-BASE_DIR = os.path.abspath(os.path.dirname(__file__))
-app.config['SQLALCHEMY_DATABASE_URI'] = f"sqlite:///{os.path.join(BASE_DIR, 'instance', 'billing_system.db')}"
+def sync_transactions():
+    # 1. Читаємо JSON (твоя імітація через Nginx)
+    # Використовуємо .json(), щоб отримати список словників
+    try:
+        response = requests.get(s.get_secret_value("BASE_API_URL",c.secret_env))
+        response.raise_for_status()
+        transactions = response.json()
+    except Exception as e:
+        print(f"Помилка запиту до банку: {e}")
+        return
+    conn = db.get_connection()
+    try:
+        data_to_insert = []
+        for tx in transactions:
+            # Конвертуємо Unix timestamp у формат MariaDB
+            unix_time = tx.get('time')
+            formatted_dt = datetime.fromtimestamp(unix_time).strftime('%Y-%m-%d %H:%M:%S') if unix_time else None
 
-app.config['SECRET_KEY'] = 'billing-system-production-key-2026'
-db = SQLAlchemy(app)
+            data_to_insert.append((
+                tx.get('id'),
+                'Monobank',
+                unix_time,
+                formatted_dt,  # Наше нове поле
+                tx.get('description'),
+                tx.get('mcc'),
+                tx.get('amount'),
+                tx.get('operationAmount'),
+                tx.get('currencyCode'),
+                tx.get('commissionRate', 0),
+                tx.get('cashbackAmount', 0),
+                tx.get('balance'),
+                1 if tx.get('hold') else 0,
+                tx.get('receiptId'),
+                tx.get('counterName')
+            ))
 
+        with conn.cursor() as cursor:
+            # Викликаємо процедуру для кожної транзакції
+            for tx_data in data_to_insert:
+                cursor.callproc('UpsertTransaction', tx_data)
+            conn.commit()
+            print(f"Успішно оновлено. Додано нових записів: {cursor.rowcount}")
+    finally:
+        conn.close()
 
-# --- ЄДИНА СТАБІЛЬНА МОДЕЛЬ ТРАНЗАКЦІЙ (РЕЄСТР БІЛІНГУ) ---
-class BillingRegistry(db.Model):
-    # Внутрішні системні поля білінгу
-    id = db.Column(db.String(100), primary_key=True)  # Унікальний ID транзакції від банку
-    bank_source = db.Column(db.String(50), default="Monobank")
-    imported_at = db.Column(db.String(20))  # Дата/час реєстрації в нашому білінгу
-    tx_type = db.Column(db.String(10), nullable=False)  # INCOME або EXPENSE
+# Псевдокод для отримання категорій
+def get_actual_categories():
+    # Виклик до твого інстансу Actual Budget
+    # Повертає список типу: [{'id': 'uuid-1', 'name': 'Продукти'}, ...]
+    import requests
+    url = f"{s.get_secret_value("ACTUAL_API_SERVER_URL",c.secret_env)}/v1/budgets/{s.get_secret_value("ACTUAL_SYNC_ID",c.secret_env)}/categories"
+    headers = {
+        "x-api-key": s.get_secret_value('ACTUAL_API_KEY',c.secret_env),
+        "Content-Type": "application/json"
+    }
+    try:
+        response = requests.get(url, headers=headers)
+        response.raise_for_status()
 
-    # Повний набір оригінальних полів з банківської виписки (Data Ingestion як є)
-    time = db.Column(db.Integer)  # Оригінальний UNIX timestamp
-    formatted_date = db.Column(db.String(20))  # Читабельний формат (YYYY-MM-DD HH:MM:SS)
-    description = db.Column(db.String(255))  # Назва торгової точки / Опис операції
-    mcc = db.Column(db.Integer)  # Числовий код MCC
-    original_mcc = db.Column(db.Integer)  # Оригінальний MCC торгової точки
-    amount = db.Column(db.Integer)  # Сума в копійках (рахунок картки)
-    operation_amount = db.Column(db.Integer)  # Сума в копійках (валюта операції)
-    currency_code = db.Column(db.Integer)  # ISO код валюти (напр. 980)
-    commission_rate = db.Column(db.Integer)  # Комісія банку в копійках
-    cashback_amount = db.Column(db.Integer)  # Нарахований кешбек в копійках
-    balance = db.Column(db.Integer)  # Залишок на балансі ПІСЛЯ проведення транзакції
-    hold = db.Column(db.Boolean)  # Чи заблоковані гроші (холдування)
-    receipt_id = db.Column(db.String(100), nullable=True)  # ID чеку/квитанції
+        # Отримуємо основний словник
+        json_response = response.json()
 
+        # Дістаємо список з ключа "data"
+        categories_data = json_response.get('data', [])
 
-@app.route('/')
-def index():
-    # Дістаємо абсолютно всі зареєстровані транзакції, сортуємо від нових до старих
-    transactions = BillingRegistry.query.order_by(BillingRegistry.time.desc()).all()
-    return render_template('index.html', transactions=transactions)
+        flat_categories = []
+        for cat in categories_data:
+            # Ігноруємо приховані категорії, якщо потрібно
+            if cat.get('hidden'):
+                continue
 
+            flat_categories.append({
+                'id': cat.get('id'),
+                'name': cat.get('name'),
+                'is_income': cat.get('is_income')
+            })
 
-@app.route('/upload_file', methods=['POST'])
-def upload_file():
-    if 'bank_file' not in request.files:
-        flash("Помилка: Файл виписки відсутній у запиті.")
-        return redirect(url_for('index'))
+        return flat_categories
 
-    file = request.files['bank_file']
-    if file.filename == '':
-        flash("Помилка: Файл не вибрано.")
-        return redirect(url_for('index'))
-
-    if file and file.filename.endswith('.json'):
-        try:
-            raw_data = json.loads(file.read().decode('utf-8'))
-            added_count = 0
-            dup_count = 0
-
-            for tx in raw_data:
-                tx_id = str(tx.get('id'))
-
-                # Захист від дублікатів на рівні первинного ключа білінгу
-                if BillingRegistry.query.get(tx_id):
-                    dup_count += 1
-                    continue
-
-                amount = tx.get('amount', 0)
-                # Визначаємо фінансовий напрямок транзакції
-                transaction_direction = "INCOME" if amount > 0 else "EXPENSE"
-
-                # Перетворюємо UNIX-timestamp у зрозумілу дату для фінансового логу
-                dt = datetime.fromtimestamp(tx.get('time', 0))
-
-                # Записуємо ВСІ оригінальні параметри без жодних модифікацій чи округлень
-                billing_entry = BillingRegistry(
-                    id=tx_id,
-                    bank_source="Monobank",
-                    imported_at=datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
-                    tx_type=transaction_direction,
-
-                    time=tx.get('time'),
-                    formatted_date=dt.strftime('%Y-%m-%d %H:%M:%S'),
-                    description=tx.get('description', 'Невідомий контрагент'),
-                    mcc=tx.get('mcc'),
-                    original_mcc=tx.get('originalMcc'),
-                    amount=amount,
-                    operation_amount=tx.get('operationAmount'),
-                    currency_code=tx.get('currencyCode'),
-                    commission_rate=tx.get('commissionRate'),
-                    cashback_amount=tx.get('cashbackAmount'),
-                    balance=tx.get('balance'),
-                    hold=tx.get('hold'),
-                    receipt_id=tx.get('receiptId')
-                )
-                db.session.add(billing_entry)
-                added_count += 1
-
-            db.session.commit()
-            flash(
-                f"Імпорт завершено успішно! Зареєстровано нових транзакцій: {added_count}. Виявлено дублікатів: {dup_count}")
-
-        except Exception as e:
-            db.session.rollback()
-            flash(f"Критична помилка обробки фінансових даних: {str(e)}")
-    else:
-        flash("Помилка: Дозволено завантаження лише файлів формату .json")
-
-    return redirect(url_for('index'))
+    except Exception as e:
+        print(f"❌ Помилка парсингу категорій: {e}")
+        return []
 
 
-if __name__ == '__main__':
-    with app.app_context():
-        db.create_all()  # Створить папку /instance та файл billing_system.db автоматично, якщо їх немає
-    app.run(port=5000, debug=True)
+def sync_actual_categories_to_db( db_conn):
+    # 1. Отримуємо категорії через твій виправлений парсер
+    categories = get_actual_categories()  # функція з попереднього кроку
+
+    if not categories:
+        print("Категорії не знайдені або помилка API")
+        return
+
+    try:
+        with db_conn.cursor() as cursor:
+            sql = """
+            INSERT INTO actual_categories (id, name, is_income)
+            VALUES (%s, %s, %s)
+            ON DUPLICATE KEY UPDATE 
+                name = VALUES(name),
+                is_income = VALUES(is_income)
+            """
+
+            data_to_update = [
+                (c['id'], c['name'], 1 if c['is_income'] else 0)
+                for c in categories
+            ]
+
+            cursor.executemany(sql, data_to_update)
+            db_conn.commit()
+            print(f"✅ Синхронізовано {len(categories)} категорій з Actual Budget.")
+
+    except Exception as e:
+        print(f"❌ Помилка запису в БД: {e}")
+
+if __name__ == "__main__":
+    # sync_transactions()
+    print(get_actual_categories())
+    #
+    sync_actual_categories_to_db(db.get_connection())
