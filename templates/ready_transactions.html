@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html lang="uk">
+<head>
+    <meta charset="UTF-8">
+    <title>Готові до експорту</title>
+    <link rel="stylesheet" href="https://cdn.simplecss.org/simple.min.css">
+</head>
+<body>
+    <header>
+        <nav>
+            <a href="/mcc-mapping">🔗 Мапінг MCC</a>
+            <a href="/" class="current">🚀 Готові транзакції</a>
+        </nav>
+        <h1>Транзакції до експорту</h1>
+        <p>Ці дані вже мають категорію і готові до відправки в Actual Budget.</p>
+    </header>
+
+    <main>
+        <table>
+            <thead>
+                <tr>
+                    <th>Дата</th>
+                    <th>Опис</th>
+                    <th>MCC</th>
+                    <th>Категорія</th>
+                    <th style="text-align: right;">Сума</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for tx in transactions %}
+                <tr>
+                    <td>{{ tx.formatted_date }}</td>
+                    <td>{{ tx.description }}</td>
+                    <td><code>{{ tx.mcc }}</code></td>
+                    <td><mark>{{ tx.cat_name }}</mark></td>
+                    <td style="text-align: right;">{{ "%.2f"|format(tx.amount / 100) }} грн</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+            <tfoot>
+                <tr>
+                    <td colspan="4"><strong>Всього до імпорту:</strong></td>
+                    <td style="text-align: right;"><strong>{{ "%.2f"|format(total) }} грн</strong></td>
+                </tr>
+            </tfoot>
+        </table>
+
+        <div style="display: flex; justify-content: flex-end; margin-top: 20px;">
+            <a href="/run-export" class="button">🚀 Підтвердити і відправити в Actual</a>
+        </div>
+    </main>
+</body>
+</html>

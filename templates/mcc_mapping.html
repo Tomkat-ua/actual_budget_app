@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html lang="uk">
+<head>
+    <meta charset="UTF-8">
+    <title>Біллінг-Міст: Мапінг MCC</title>
+    <link rel="stylesheet" href="https://cdn.simplecss.org/simple.min.css">
+</head>
+<body>
+    <header>
+        <nav>
+            <a href="/">Транзакції</a>
+            <a href="/fetch-data" class="button">📥 Оновити з банку</a>
+            <a href="/mcc-mapping" class="current">Мапінг MCC</a>
+            <a href="/sync-categories">Оновити категорії</a>
+        </nav>
+        <h1>Управління категоріями</h1>
+        <p>Зв'яжіть технічні коди банків (MCC) з категоріями вашого бюджету.</p>
+    </header>
+
+    <main>
+        <section>
+            <h2>Нові MCC, знайдені у виписках</h2>
+            <table>
+                <thead>
+                    <tr>
+                        <th>MCC</th>
+                        <th>Приклад опису</th>
+                        <th>Вибір категорії в Actual Budget</th>
+                        <th>Дія</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for item in unmapped %}
+                    <tr>
+                        <form method="POST" action="/mcc-mapping">
+                            <td><code>{{ item.mcc }}</code></td>
+                            <input type="hidden" name="mcc" value="{{ item.mcc }}">
+                            <td><small>{{ item.description }}</small></td>
+                            <td>
+                                <select name="cat_id" required>
+                                    <option value="" disabled selected>Оберіть категорію...</option>
+                                    {% for cat in categories %}
+                                    <option value="{{ cat.id }}">{{ cat.name }}</option>
+                                    {% endfor %}
+                                </select>
+                            </td>
+                            <td><button type="submit">Зберегти</button></td>
+                        </form>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </section>
+    </main>
+
+    <footer>
+        <p>Billing Bridge v1.0 | 2026</p>
+    </footer>
+</body>
+</html>

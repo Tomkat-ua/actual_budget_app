@@ -1,7 +1,8 @@
 #fastapi
 requests
 flask
-flask_sqlalchemy
+#flask_sqlalchemy
 infisicalsdk
 dotenv
 flask
+pymysql

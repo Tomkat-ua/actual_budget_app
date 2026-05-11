@@ -1,124 +1,122 @@
-import requests
-import db , secret as s, config as c
-from datetime import datetime
+from flask import Flask, render_template, request, redirect
+import db
 
 
-def sync_transactions():
-    # 1. Читаємо JSON (твоя імітація через Nginx)
-    # Використовуємо .json(), щоб отримати список словників
-    try:
-        response = requests.get(s.get_secret_value("BASE_API_URL",c.secret_env))
-        response.raise_for_status()
-        transactions = response.json()
-    except Exception as e:
-        print(f"Помилка запиту до банку: {e}")
-        return
+app = Flask(__name__)
+
+
+@app.route('/mcc-mapping', methods=['GET', 'POST'])
+def mcc_mapping():
     conn = db.get_connection()
     try:
-        data_to_insert = []
-        for tx in transactions:
-            # Конвертуємо Unix timestamp у формат MariaDB
-            unix_time = tx.get('time')
-            formatted_dt = datetime.fromtimestamp(unix_time).strftime('%Y-%m-%d %H:%M:%S') if unix_time else None
-
-            data_to_insert.append((
-                tx.get('id'),
-                'Monobank',
-                unix_time,
-                formatted_dt,  # Наше нове поле
-                tx.get('description'),
-                tx.get('mcc'),
-                tx.get('amount'),
-                tx.get('operationAmount'),
-                tx.get('currencyCode'),
-                tx.get('commissionRate', 0),
-                tx.get('cashbackAmount', 0),
-                tx.get('balance'),
-                1 if tx.get('hold') else 0,
-                tx.get('receiptId'),
-                tx.get('counterName')
-            ))
-
         with conn.cursor() as cursor:
-            # Викликаємо процедуру для кожної транзакції
-            for tx_data in data_to_insert:
-                cursor.callproc('UpsertTransaction', tx_data)
-            conn.commit()
-            print(f"Успішно оновлено. Додано нових записів: {cursor.rowcount}")
+            if request.method == 'POST':
+                mcc = request.form.get('mcc')
+                cat_id = request.form.get('cat_id')
+                # Вставляємо мапінг у твою нову таблицю mcc_map
+                cursor.execute(
+                    "INSERT INTO mcc_map (mcc_code, cat_id) VALUES (%s, %s) ON DUPLICATE KEY UPDATE cat_id=VALUES(cat_id)",
+                    (mcc, cat_id)
+                )
+                conn.commit()
+                return redirect('/mcc-mapping')
+
+            # 1. Отримуємо незмаплені MCC
+            cursor.execute("""
+                SELECT DISTINCT t.mcc, t.description 
+                FROM transactions t
+                LEFT JOIN mcc_map m ON t.mcc = m.mcc_code
+                WHERE m.mcc_code IS NULL AND t.mcc IS NOT NULL
+            """)
+            unmapped = cursor.fetchall()
+
+            # 2. Отримуємо категорії для випадаючого списку
+            cursor.execute("SELECT id, name FROM actual_categories ORDER BY name")
+            categories = cursor.fetchall()
+
+    finally:
+        conn.close() # Важливо закривати з'єднання
+
+    return render_template('mcc_mapping.html', unmapped=unmapped, categories=categories)
+
+@app.route('/sync-categories')
+def sync_categories():
+    import actual_sync # твій модуль, де лежить функція sync_actual_categories_to_db
+    conn = db.get_connection()
+    try:
+        # s — твій словник секретів з Infisical
+        actual_sync.sync_actual_categories_to_db(conn)
+    finally:
+        conn.close()
+    return redirect('/mcc-mapping') # або на головну
+
+#### 2. Перегляд та Експорт транзакцій (`/transactions`)
+
+@app.route('/transactions')
+def show_transactions():
+    conn = db.get_connection()
+    try:
+        with conn.cursor() as cursor:
+            # Виводимо лише змаплені транзакції, які ще не в бюджеті
+            cursor.execute("""
+                SELECT t.id, t.formatted_date, t.description, t.amount, c.name as cat_name
+                FROM transactions t
+                JOIN mcc_map m ON t.mcc = m.mcc_code
+                JOIN actual_categories c ON m.cat_id = c.id
+                WHERE t.imported_at IS NULL
+                ORDER BY t.formatted_date DESC
+            """)
+            ready_tx = cursor.fetchall()
+    finally:
+        conn.close()
+    return render_template('transactions.html', transactions=ready_tx)
+
+
+@app.route('/')
+def show_ready_transactions():
+    conn = db.get_connection()
+    try:
+        with conn.cursor() as cursor:
+            sql = """
+                SELECT 
+                    t.formatted_date, 
+                    t.description, 
+                    t.amount, 
+                    c.name as cat_name,
+                    t.mcc
+                FROM transactions t
+                JOIN mcc_map m ON t.mcc = m.mcc_code
+                JOIN actual_categories c ON m.cat_id = c.id
+                WHERE t.imported_at IS NULL
+                ORDER BY t.formatted_date DESC
+            """
+            cursor.execute(sql)
+            transactions = cursor.fetchall()
+
+            # Рахуємо загальну суму для перевірки
+            total = sum(tx['amount'] for tx in transactions) / 100
+
     finally:
         conn.close()
 
-# Псевдокод для отримання категорій
-def get_actual_categories():
-    # Виклик до твого інстансу Actual Budget
-    # Повертає список типу: [{'id': 'uuid-1', 'name': 'Продукти'}, ...]
-    import requests
-    url = f"{s.get_secret_value("ACTUAL_API_SERVER_URL",c.secret_env)}/v1/budgets/{s.get_secret_value("ACTUAL_SYNC_ID",c.secret_env)}/categories"
-    headers = {
-        "x-api-key": s.get_secret_value('ACTUAL_API_KEY',c.secret_env),
-        "Content-Type": "application/json"
-    }
-    try:
-        response = requests.get(url, headers=headers)
-        response.raise_for_status()
-
-        # Отримуємо основний словник
-        json_response = response.json()
-
-        # Дістаємо список з ключа "data"
-        categories_data = json_response.get('data', [])
-
-        flat_categories = []
-        for cat in categories_data:
-            # Ігноруємо приховані категорії, якщо потрібно
-            if cat.get('hidden'):
-                continue
-
-            flat_categories.append({
-                'id': cat.get('id'),
-                'name': cat.get('name'),
-                'is_income': cat.get('is_income')
-            })
-
-        return flat_categories
-
-    except Exception as e:
-        print(f"❌ Помилка парсингу категорій: {e}")
-        return []
+    return render_template('ready_transactions.html',
+                           transactions=transactions,
+                           total=total)
 
 
-def sync_actual_categories_to_db( db_conn):
-    # 1. Отримуємо категорії через твій виправлений парсер
-    categories = get_actual_categories()  # функція з попереднього кроку
-
-    if not categories:
-        print("Категорії не знайдені або помилка API")
-        return
+@app.route('/fetch-data')
+def fetch_data():
+    from actual_sync import sync_transactions
 
     try:
-        with db_conn.cursor() as cursor:
-            sql = """
-            INSERT INTO actual_categories (id, name, is_income)
-            VALUES (%s, %s, %s)
-            ON DUPLICATE KEY UPDATE 
-                name = VALUES(name),
-                is_income = VALUES(is_income)
-            """
-
-            data_to_update = [
-                (c['id'], c['name'], 1 if c['is_income'] else 0)
-                for c in categories
-            ]
-
-            cursor.executemany(sql, data_to_update)
-            db_conn.commit()
-            print(f"✅ Синхронізовано {len(categories)} категорій з Actual Budget.")
-
+        # Викликаємо твою готову процедуру
+        sync_transactions()
+        # Після успішного завантаження йдемо на мапінг
+        return redirect('/mcc-mapping')
     except Exception as e:
-        print(f"❌ Помилка запису в БД: {e}")
+        return f"Крах при синхронізації: {e}", 500
+###############################################################################################################
 
-if __name__ == "__main__":
-    # sync_transactions()
-    print(get_actual_categories())
-    #
-    sync_actual_categories_to_db(db.get_connection())
+
+if __name__ == '__main__':
+    app.run(host='0.0.0.0', port=5000, debug=True)
