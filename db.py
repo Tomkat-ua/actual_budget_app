@@ -19,7 +19,7 @@ db_config = {
     'database': c.db_name ,
     'cursorclass': pymysql.cursors.DictCursor
 }
-
+print(db_config)
 def get_connection():
     conn = pymysql.connect(**db_config)
     return conn
