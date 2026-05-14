@@ -71,7 +71,6 @@ def show_transactions():
         conn.close()
     return render_template('transactions.html', transactions=ready_tx)
 
-
 @app.route('/')
 def show_ready_transactions():
     conn = db.get_connection()
@@ -95,21 +94,16 @@ def show_ready_transactions():
 
             # Рахуємо загальну суму для перевірки
             total = sum(tx['amount'] for tx in transactions) / 100
-
     finally:
         conn.close()
-
     return render_template('ready_transactions.html',
                            transactions=transactions,
                            total=total)
 
-
 @app.route('/fetch-data')
 def fetch_data():
     from actual_sync import sync_transactions
-
     try:
-        # Викликаємо твою готову процедуру
         sync_transactions()
         # Після успішного завантаження йдемо на мапінг
         return redirect('/mcc-mapping')

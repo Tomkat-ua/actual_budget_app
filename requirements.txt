@@ -6,3 +6,4 @@ infisicalsdk
 dotenv
 flask
 pymysql
+gunicorn
