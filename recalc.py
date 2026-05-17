@@ -26,6 +26,24 @@ def get_curr_rate(cc):
     result = value['rate']
     return result
 
+def recalc(accid_uah_ca,accid_cur_ci,cc):
+    try:
+        cur_rate = get_curr_rate(cc)
+        balance_accid_uah_ca = get_balance(accid_uah_ca)
+        balance_accid_cur_ci = get_balance(accid_cur_ci)
+        eq_cur = balance_accid_cur_ci * cur_rate
+        amount = int(eq_cur - balance_accid_uah_ca)
+        print(f'--{cc}--')
+        print('cur_rate:',cur_rate)
+        print('balance_accid_uah_ca:',balance_accid_uah_ca)
+        print('balance_accid_cur_ci:',balance_accid_cur_ci)
+        print('eq_cur:',eq_cur)
+        print('oper amount:',amount)
+        return amount
+    except Exception as e:
+        print(f"❌ Помилка : {e}")
+
+
 def push_recalc():
     all_responses = []
     try:
@@ -37,11 +55,9 @@ def push_recalc():
         con.commit()
         for row in data:
             cur_rate = get_curr_rate(row['cc'])
-            oper_value = int(
-                get_balance(row['accid_uah_ca']) - (get_balance(row['accid_cur_ci'])*cur_rate)
-                             )
+            # oper_value = int( get_balance(row['accid_uah_ca']) - (get_balance(row['accid_cur_ci'])*cur_rate) )
+            oper_value = recalc(row['accid_uah_ca'],row['accid_cur_ci'],row['cc'])
             if oper_value != 0:
-                print(f"---{row['id']}---{row['cc']}---")
                 url = f"{c.actual_api_url}/v1/budgets/{c.actual_sync_id}/accounts/{row['accid_uah_ai']}/transactions"
                 body = {
                     "learnCategories": False,
@@ -49,7 +65,7 @@ def push_recalc():
                     "transaction": {
                         "account": row['accid_uah_ai'],
                         "date": datetime.now().date().isoformat(),
-                        "amount": oper_value,
+                        "amount": oper_value * (-1),
                         "payee": row['payeeid'],
                         "category": row['categoryid'],
                         "notes": f"Валютна позиція {row['cc']} (курс {cur_rate})"
@@ -59,6 +75,7 @@ def push_recalc():
                 response.raise_for_status()
                 if response.status_code == 200:
                     print(f"Транзакція на {oper_value / 100} успішно додана, переказ згенеровано!")
+                    print(f"--{row['cc']}------------------")
                 else:
                     print(f"Помилка {response.status_code}: {response.text}")
                 # json_response = response.json()
@@ -71,6 +88,4 @@ def push_recalc():
 
 
 print(push_recalc())
-
-
 
